@@ -1,11 +1,14 @@
 #!/usr/bin/env python3.8
 
+ADDON_API_FSTRING = "https://addons-ecs.forgesvc.net/api/v2/addon/{}"
+
 from argparse import ArgumentParser, FileType, ArgumentTypeError
 from logging import DEBUG, INFO, WARNING, ERROR, basicConfig as logConfig
 from pathlib import Path
 from html.parser import HTMLParser
 from json import load as jload
 from urllib import request
+from urllib.parse import quote
 
 def parse_arguments():
     def file_path(path):
@@ -48,28 +51,20 @@ def get_log_level(verbose, quiet):
                 DEBUG   #  2 <= verbose
 
 def main(args):
-    log_level = get_log_level(args.verbose, args.quiet)
-    modlist_parser = MyHTMLParser()
-    with open(args.modlist, "r") as modlist_file, open(args.manifest, "r") as manifest_file:
-        modlist_parser.feed(modlist_file.read())
-        modlist_urls = modlist_parser.urls
-        manifest = jload(manifest_file)
-        file_ids = [entry["fileID"] for entry in manifest["files"]]
-        download_urls = [f"{url}/download/{fid}/file" for url, fid in zip(modlist_urls, file_ids)]
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Upgrade-Insecure-Requests": "1"
-        }
-        for url in download_urls:
-            req = request.Request(url, None, headers)
-            response = request.urlopen(req)
-            file_url = response.url
-            file_name = file_url.split('/')[-1]
 
-            download = request.urlopen(file_url)
+    log_level = get_log_level(args.verbose, args.quiet)
+    with open(args.manifest, "r") as manifest_file:
+        manifest = jload(manifest_file)
+
+        for entry in manifest["files"]:
+            project_id = entry["projectID"]
+            response = request.urlopen(ADDON_API_FSTRING.format(project_id), timeout=60)
+            content = jload(response)
+            file_url = content["latestFiles"][-1]["downloadUrl"]
+
+            download = request.urlopen(quote(file_url, safe=':/'))
             meta = download.info()
+            file_name = file_url.split('/')[-1]
             file_size = int(meta.get("Content-Length"))
             print(f"Downloading: {file_name} Bytes: {file_size}")
 
@@ -80,14 +75,11 @@ def main(args):
                     buffer = download.read(block_sz)
                     if not buffer:
                         break
-
                     file_size_dl += len(buffer)
                     f.write(buffer)
                     status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
                     status = status + chr(8)*(len(status)+1)
                     print(status, end = "")
-
-
 
 if "__main__" == __name__:
     args = parse_arguments()
